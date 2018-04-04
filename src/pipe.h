@@ -23,9 +23,15 @@ private:
     size_t _get_count;
 
 public:
-    Pipe(size_t max_buffer_size = 10) : _eof(false), _max_buffer_size(max_buffer_size), _put_count(0), _get_count(0)
+    Pipe(size_t max_buffer_size = 10) noexcept : _eof(false), _max_buffer_size(max_buffer_size), _put_count(0), _get_count(0)
     {
     }
+    Pipe(const Pipe<T>&) = delete;
+    Pipe(Pipe<T>&&) = default;
+
+    Pipe<T>& operator=(const Pipe<T>&) = delete;
+
+    virtual ~Pipe() = default;
 
     void start()
     {
@@ -65,7 +71,7 @@ public:
             throw std::runtime_error("attempt to put data to closed pipe");
 
         _ts_cv.wait(lock_ts, [this]() {
-            return _ts.size() < _max_buffer_size;
+            return _max_buffer_size == 0 || _ts.size() < _max_buffer_size;
         });
 
         _ts.push(t);

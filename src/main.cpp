@@ -21,6 +21,8 @@ int main(int argc, char** argv)
         TCPServer srv(io, std::atoi(argv[1]));
 
         io.run();
+
+        srv.done();
     } catch(std::exception& e) {
         std::cerr << e.what() << std::endl;
     }
