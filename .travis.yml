@@ -14,4 +14,4 @@ script:
 deploy:
   provider: script
   skip_cleanup: true
-  script: curl -T bulk_server-0.0.$TRAVIS_BUILD_NUMBER-Linux.deb -umadmazoku:$BINTRAY_API_KEY "https://api.bintray.com/content/madmazoku/otus.lessons/22.01/$TRAVIS_BUILD_NUMBER/bulk_server-0.0.$TRAVIS_BUILD_NUMBER-Linux.deb;deb_distribution=trusty;deb_component=main;deb_architecture=amd64;publish=1"
+  script: curl -T bulk_server-0.0.$TRAVIS_BUILD_NUMBER-Linux.deb -umadmazoku:$BINTRAY_API_KEY "https://api.bintray.com/content/madmazoku/otus.lessons/24.01/$TRAVIS_BUILD_NUMBER/bulk_server-0.0.$TRAVIS_BUILD_NUMBER-Linux.deb;deb_distribution=trusty;deb_component=main;deb_architecture=amd64;publish=1"
