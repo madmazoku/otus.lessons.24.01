@@ -15,7 +15,8 @@
 
 #include "processor.h"
 
-class TCPConnection : public std::enable_shared_from_this<TCPConnection> {
+class TCPConnection : public std::enable_shared_from_this<TCPConnection>
+{
 private:
     boost::asio::ip::tcp::socket _socket;
 
@@ -25,28 +26,30 @@ private:
     size_t _buffer_size;
 
 public:
-    TCPConnection(boost::asio::ip::tcp::socket socket, size_t buffer_size = 10, size_t max_reader_buffer_size = 10) : 
-            _socket(std::move(socket)), 
-            _reader(max_reader_buffer_size),
-            _buffer(new char[buffer_size]), 
-            _buffer_size(buffer_size)
+    TCPConnection(boost::asio::ip::tcp::socket socket, size_t buffer_size = 10, size_t max_reader_buffer_size = 10) :
+        _socket(std::move(socket)),
+        _reader(max_reader_buffer_size),
+        _buffer(new char[buffer_size]),
+        _buffer_size(buffer_size)
     {
     }
 
-    ~TCPConnection() {
-        std::cout << "~TCPConnection" << std::endl;
+    ~TCPConnection()
+    {
         delete[] _buffer;
     }
 
-    void attach(Pipe<Command>& mixer, Pipe<Commands>& distributor) {
+    void attach(Pipe<Command>& mixer, Pipe<Commands>& distributor)
+    {
         _reader.attach(mixer, distributor);
     }
 
-    void detach() {
+    void detach()
+    {
         _reader.detach();
     }
 
-    void start() 
+    void start()
     {
         _reader.run();
 
@@ -59,23 +62,23 @@ private:
         auto self(shared_from_this());
         _socket.async_read_some(
             boost::asio::buffer(_buffer, _buffer_size),
-            [this, self](boost::system::error_code ec, std::size_t length)
-            {
-                if(!ec) {
-                    std::string buffer{_buffer, length};
-                    std::cout << "output[" << this << " / " << length << "]: '" << buffer << "'" << std::endl;
-                    _reader.put(std::string{_buffer, length});
-                    do_read();
-                } else if ((boost::asio::error::eof == ec) || (boost::asio::error::connection_reset == ec)) {
-                    std::cerr << "disconnect: " << this << std::endl;
-                    _reader.finish();
-                    _reader.join();
-                    _reader.detach();
-                    std::cerr << "disconnected: " << this << std::endl;
-                } else {
-                    std::cerr << "read error[" << this << ": " << ec << std::endl;
-                }
+        [this, self](boost::system::error_code ec, std::size_t length) {
+            if(!ec) {
+                Metrics::get().update("connection.buffer.count", 1);
+                Metrics::get().update("connection.buffer.size", length);
+
+                std::string buffer{_buffer, length};
+                _reader.put(std::string{_buffer, length});
+                do_read();
+            } else if ((boost::asio::error::eof == ec) || (boost::asio::error::connection_reset == ec)) {
+                // std::cerr << "disconnect: " << this << std::endl;
+                _reader.join();
+                _reader.detach();
+                // std::cerr << "disconnected: " << this << std::endl;
+            } else {
+                // std::cerr << "read error[" << this << ": " << ec << std::endl;
             }
+        }
         );
     }
 };

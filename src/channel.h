@@ -6,14 +6,16 @@
 #include "pipe.h"
 
 template<typename T>
-class Channel : public Pipe<T> {
+class Channel : public Pipe<T>
+{
 private:
     std::queue<std::thread> _threads;
 
     virtual void act(size_t n) = 0;
 
 public:
-    Channel(size_t max_buffer_size = 10) noexcept : Pipe<T>(max_buffer_size) {
+    Channel(size_t max_buffer_size = 10) noexcept : Pipe<T>(max_buffer_size)
+    {
     }
     Channel(const Channel<T>&) = delete;
     Channel(Channel<T>&&) = default;
@@ -22,22 +24,22 @@ public:
 
     virtual ~Channel() = default;
 
-    void run(size_t threads_size = 1) {
+    void run(size_t threads_size = 1)
+    {
         if(threads_size == 0)
             threads_size = std::thread::hardware_concurrency();
         if(threads_size == 0)
             threads_size = 1;
-        std::cout << "run channel: " << threads_size << std::endl;
         for(size_t n = 0; n < threads_size; ++n) {
-            std::cout << "add thread: " << n << std::endl;
-            _threads.push(std::thread([this, n]{
-                std::cout << "thread added: " << n << std::endl;
+            _threads.push(std::thread([this, n] {
                 act(n);
             }));
         }
     }
 
-    void join() {
+    void join()
+    {
+        Pipe<T>::finish();
         while(!_threads.empty()) {
             _threads.front().join();
             _threads.pop();
