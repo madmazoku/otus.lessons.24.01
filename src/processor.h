@@ -227,10 +227,7 @@ private:
             _data.append(buffer);
             process_data();
         }
-        if(!_commands.empty()) {
-            mix(MixerRecord(_commands));
-            _commands.clear();
-        }
+        _commands.clear();
         mix(MixerRecord(MixerRecordUtil::eof));
     }
 
