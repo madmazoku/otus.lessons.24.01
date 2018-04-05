@@ -4,8 +4,8 @@
 #include <boost/bind.hpp>
 #include <boost/asio/signal_set.hpp>
 
-#include "tcp_connection.h"
 #include "processor.h"
+#include "tcp_connection.h"
 
 class TCPServer
 {
@@ -76,7 +76,7 @@ private:
                 Metrics::get().update("server.connect.count", 1);
 
                 auto new_connection = std::make_shared<TCPConnection>(std::move(_socket));
-                new_connection->attach(_mixer, _distributor);
+                new_connection->attach(_mixer);
                 new_connection->start();
                 do_accept();
             } else if (boost::asio::error::operation_aborted == ec) {

@@ -39,9 +39,9 @@ public:
         delete[] _buffer;
     }
 
-    void attach(Pipe<Command>& mixer, Pipe<Commands>& distributor)
+    void attach(Pipe<MixerRecord>& mixer)
     {
-        _reader.attach(mixer, distributor);
+        _reader.attach(mixer);
     }
 
     void detach()

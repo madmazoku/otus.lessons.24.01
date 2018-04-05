@@ -6,6 +6,8 @@
 #include <iostream>
 #include <fstream>
 
+#include <boost/variant.hpp>
+
 #include "pipe.h"
 #include "channel.h"
 #include "metrics.h"
@@ -34,12 +36,129 @@ std::ostream& operator<<(std::ostream& out, const Commands& commands)
     return out;
 }
 
+enum class MixerRecordType {
+    command,
+    block,
+    util
+};
+
+enum class MixerRecordUtil {
+    eof
+};
+
+struct MixerRecord {
+    MixerRecordType type;
+    boost::variant<Command, Commands, MixerRecordUtil> data;
+    std::thread::id thread_id;
+
+    MixerRecord(const Command& command) : type(MixerRecordType::command), data(command), thread_id(std::this_thread::get_id())
+    {
+    }
+
+    MixerRecord(const Commands& commands) : type(MixerRecordType::block), data(commands), thread_id(std::this_thread::get_id())
+    {
+    }
+
+    MixerRecord(const MixerRecordUtil& util) : type(MixerRecordType::util), data(util), thread_id(std::this_thread::get_id())
+    {
+    }
+
+    MixerRecord() = default;
+    MixerRecord(const MixerRecord& mr) = default;
+    MixerRecord(MixerRecord&& mr) = default;
+
+    MixerRecord& operator=(const MixerRecord&) = delete;
+    MixerRecord& operator=(MixerRecord&&) = default;
+};
+
+class Mixer : public Channel<MixerRecord>
+{
+private:
+    size_t _N;
+    Pipe<Commands>* _distributor;
+
+    using CommandRec = std::tuple<Command, std::thread::id>;
+    using CommandRecs = std::list<CommandRec>;
+
+    virtual void act(size_t n) final {
+        CommandRecs recs;
+        MixerRecord rec;
+        while(get(rec))
+        {
+            switch(rec.type) {
+            case MixerRecordType::command:
+                recs.push_back(std::make_tuple(boost::get<Command>(rec.data), rec.thread_id));
+                if(_N == 0 || recs.size() == _N)
+                    distribute(recs);
+                break;
+            case MixerRecordType::block:
+                distribute(rec.thread_id, recs);
+                distribute(boost::get<Commands>(rec.data));
+                break;
+            case MixerRecordType::util:
+                switch(boost::get<MixerRecordUtil>(rec.data)) {
+                case MixerRecordUtil::eof:
+                    distribute(rec.thread_id, recs);
+                    break;
+                }
+                break;
+            };
+        }
+    }
+
+    void distribute(std::thread::id thread_id, CommandRecs& recs)
+    {
+        if(recs.empty())
+            return;
+
+        bool found = false;
+        for(auto &r : recs)
+            if(std::get<1>(r) == thread_id) {
+                found = true;
+                break;
+            }
+        if(found)
+            distribute(recs);
+    }
+
+    void distribute(CommandRecs& recs)
+    {
+        Commands commands;
+        while(!recs.empty()) {
+            commands.push_back(std::get<0>(recs.front()));
+            recs.pop_front();
+        }
+        distribute(commands);
+    }
+
+    void distribute(Commands& commands)
+    {
+        Metrics::get().update("mixer.send.blocks", 1);
+        Metrics::get().update("mixer.send.commands", commands.size());
+        _distributor->put(commands);
+    }
+
+public:
+    Mixer(size_t N, size_t max_buffer_size = 10) noexcept : Channel<MixerRecord>(max_buffer_size), _N(N)
+    {
+    }
+
+    void attach(Pipe<Commands>& distributor)
+    {
+        _distributor = &distributor;
+    }
+
+    void detach()
+    {
+        _distributor = nullptr;
+    }
+};
+
 class Reader : public Channel<std::string>
 {
 private:
 
-    Pipe<Command>* _mixer;
-    Pipe<Commands>* _distributor;
+    Pipe<MixerRecord>* _mixer;
 
     Commands _commands;
     std::string _data;
@@ -67,34 +186,38 @@ private:
         Metrics::get().update("reader.line.size", line.size());
 
         if(line == "{") {
-            if(_bracket_counter++ == 0) {
-                mix(std::make_tuple(0, ""));
-            }
+            ++_bracket_counter;
         } else if(line == "}") {
-            if(_bracket_counter > 0 && --_bracket_counter == 0)
-                distribute();
+            if(_bracket_counter > 0 && --_bracket_counter == 0) {
+                mix(MixerRecord(_commands));
+                _commands.clear();
+            }
         } else if(_bracket_counter > 0) {
             _commands.push_back(std::make_tuple(std::time(nullptr), line));
         } else {
-            mix(std::make_tuple(std::time(nullptr), line));
+            mix(MixerRecord(std::make_tuple(std::time(nullptr), line)));
         }
     }
 
-    void distribute()
+    void mix(const MixerRecord& rec)
     {
-        Metrics::get().update("reader.distribute.blocks", 1);
-        Metrics::get().update("reader.distribute.commands", _commands.size());
-        _distributor->put(_commands);
-        _commands.clear();
-    }
-
-    void mix(const Command& command)
-    {
-        if(std::get<0>(command) != 0)
+        switch(rec.type) {
+        case MixerRecordType::command:
             Metrics::get().update("reader.mix.commands", 1);
-        else
-            Metrics::get().update("reader.mix.commands_util", 1);
-        _mixer->put(command);
+            break;
+        case MixerRecordType::block:
+            Metrics::get().update("reader.mix.block.count", 1);
+            Metrics::get().update("reader.mix.block.size", boost::get<Commands>(rec.data).size());
+            break;
+        case MixerRecordType::util:
+            switch(boost::get<MixerRecordUtil>(rec.data)) {
+            case MixerRecordUtil::eof:
+                Metrics::get().update("reader.mix.eof", 1);
+                break;
+            }
+            break;
+        };
+        _mixer->put(rec);
     }
 
     virtual void act(size_t n) override
@@ -104,83 +227,33 @@ private:
             _data.append(buffer);
             process_data();
         }
-        _commands.clear();
-        mix(std::make_tuple(0, ""));
+        if(!_commands.empty()) {
+            mix(MixerRecord(_commands));
+            _commands.clear();
+        }
+        mix(MixerRecord(MixerRecordUtil::eof));
     }
 
 public:
     Reader(size_t max_buffer_size = 10) noexcept
         : Channel<std::string>(max_buffer_size),
           _mixer(nullptr),
-          _distributor(nullptr),
           _bracket_counter(0)
     {
     }
     virtual ~Reader() = default;
 
-    void attach(Pipe<Command>& mixer, Pipe<Commands>& distributor)
+    void attach(Pipe<MixerRecord>& mixer)
     {
         _mixer = &mixer;
-        _distributor = &distributor;
     }
 
     void detach()
     {
         _mixer = nullptr;
-        _distributor = nullptr;
     }
 
 };
-
-class Mixer : public Channel<Command>
-{
-private:
-    size_t _N;
-    Pipe<Commands>* _distributor;
-
-    virtual void act(size_t n) final {
-        Command command;
-        Commands commands;
-        while(get(command))
-        {
-            if(std::get<0>(command) != 0) {
-                commands.push_back(command);
-                Metrics::get().update("mixer.receive.commands", 1);
-            } else
-                Metrics::get().update("mixer.receive.commands_util", 1);
-
-            if((_N != 0 && commands.size() == _N) || (std::get<0>(command) == 0 && commands.size() > 0)) {
-                _distributor->put(commands);
-                commands.clear();
-            }
-        }
-        if(!commands.empty())
-            _distributor->put(commands);
-    }
-
-    void distribute(const Commands& commands)
-    {
-        Metrics::get().update("mixer.send.blocks", 1);
-        Metrics::get().update("mixer.send.commands", commands.size());
-        _distributor->put(commands);
-    }
-
-public:
-    Mixer(size_t N, size_t max_buffer_size = 10) noexcept : Channel<Command>(max_buffer_size), _N(N)
-    {
-    }
-
-    void attach(Pipe<Commands>& distributor)
-    {
-        _distributor = &distributor;
-    }
-
-    void detach()
-    {
-        _distributor = nullptr;
-    }
-};
-
 
 class Processor : public Channel<Commands>
 {

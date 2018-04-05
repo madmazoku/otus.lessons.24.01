@@ -90,7 +90,7 @@ public:
         if(_ts.empty())
             return false;
 
-        t = _ts.front();
+        t = std::move(_ts.front());
         _ts.pop();
         ++_get_count;
         _ts_cv.notify_all();
